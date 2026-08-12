@@ -491,7 +491,7 @@
                     </button>
 
                     <hr style="margin: 20px 0; border: 1px solid #e2e8f0;">
-
+                    
                     <!-- Data File Selection -->
                     <div class="form-group">
                         <label for="data-file-select">Select Data File:</label>
@@ -506,6 +506,17 @@
 
                     <button id="load-data-btn" class="btn btn-secondary" :disabled="loading" @click="loadData">
                         📁 Load Data
+                    </button>
+
+                    <!-- Fetch Futures Data (akshare) -->
+                    <div class="form-group" style="margin-top: 15px;">
+                        <label for="futures-symbol">Fetch Futures Daily K-line (past 1 year):</label>
+                        <input type="text" id="futures-symbol" v-model="futuresSymbol" placeholder="e.g. RB0, IF0, AU0">
+                        <small class="form-text">Enter futures main-continuous contract code (akshare/Sina source), fetch past 1 year daily K-line and save as CSV</small>
+                    </div>
+
+                    <button id="fetch-futures-btn" class="btn btn-warning" :disabled="loading || !futuresSymbol" @click="fetchFutures">
+                        📥 Fetch Futures Data
                     </button>
 
                     <!-- Data Information Display -->
@@ -680,6 +691,7 @@
                 const selectedDataFile = ref('');
                 const currentDataFile = ref(null);
                 const currentDataInfo = ref(null);
+                const futuresSymbol = ref('');
 
                 const lookback = ref(400);
                 const predLen = ref(120);
@@ -840,6 +852,38 @@
                     } catch (error) {
                         console.error('❌ Data loading failed:', error);
                         showStatus('error', `Data loading failed: ${error.response?.data?.error || error.message}`);
+                    } finally {
+                        showLoading(false);
+                    }
+                }
+
+                async function fetchFutures() {
+                    const symbol = (futuresSymbol.value || '').trim();
+                    if (!symbol) {
+                        showStatus('error', 'Please enter a futures contract code');
+                        return;
+                    }
+
+                    try {
+                        showLoading(true);
+                        const response = await axios.post('/api/fetch-futures', { symbol });
+
+                        if (response.data.success) {
+                            showStatus('success', response.data.message);
+                            console.log('✅ Futures data fetched:', response.data);
+
+                            // Refresh data file list and auto-select the new file
+                            await loadDataFiles();
+                            const newPath = response.data.file.path;
+                            if (dataFiles.value.some(f => f.path === newPath)) {
+                                selectedDataFile.value = newPath;
+                            }
+                        } else {
+                            showStatus('error', response.data.error);
+                        }
+                    } catch (error) {
+                        console.error('❌ Failed to fetch futures data:', error);
+                        showStatus('error', `Failed to fetch futures data: ${error.response?.data?.error || error.message}`);
                     } finally {
                         showLoading(false);
                     }
@@ -1078,6 +1122,7 @@
                     dataFiles,
                     selectedDataFile,
                     currentDataInfo,
+                    futuresSymbol,
                     lookback,
                     predLen,
                     temperature,
@@ -1097,6 +1142,7 @@
                     // methods
                     loadModel,
                     loadData,
+                    fetchFutures,
                     startPrediction,
                     onHandleMouseDown,
                     onTrackMouseDown

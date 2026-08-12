@@ -21,6 +21,13 @@ except ImportError:
     MODEL_AVAILABLE = False
     print("Warning: Kronos model cannot be imported, will use simulated data for demonstration")
 
+try:
+    import akshare as ak
+    AKSHARE_AVAILABLE = True
+except ImportError:
+    AKSHARE_AVAILABLE = False
+    print("Warning: akshare library not available, futures data fetching will be disabled")
+
 app = Flask(__name__)
 CORS(app)
 
@@ -399,6 +406,79 @@ def load_data():
         
     except Exception as e:
         return jsonify({'error': f'Failed to load data: {str(e)}'}), 500
+
+@app.route('/api/fetch-futures', methods=['POST'])
+def fetch_futures():
+    """Fetch futures daily K-line data for the past year via akshare and save as CSV"""
+    try:
+        if not AKSHARE_AVAILABLE:
+            return jsonify({'error': 'akshare library not available, please install akshare first'}), 400
+
+        data = request.get_json()
+        symbol = (data.get('symbol') or '').strip().upper()
+
+        if not symbol:
+            return jsonify({'error': 'Futures contract code cannot be empty'}), 400
+
+        # Fetch daily K-line data from akshare (Sina source, supports main continuous contracts like RB0)
+        try:
+            raw_df = ak.futures_zh_daily_sina(symbol=symbol)
+        except Exception as e:
+            return jsonify({'error': f'akshare fetch failed: {str(e)}'}), 500
+
+        if raw_df is None or len(raw_df) == 0:
+            return jsonify({'error': f'No data fetched for symbol: {symbol}'}), 400
+
+        # akshare returns: date, open, high, low, close, volume, hold
+        # Rename to the CSV schema expected by load_data_file
+        df = raw_df.rename(columns={'date': 'timestamps'})
+
+        # Keep only expected columns (amount is optional; use hold as amount placeholder)
+        keep_cols = ['timestamps', 'open', 'high', 'low', 'close']
+        if 'volume' in df.columns:
+            keep_cols.append('volume')
+        if 'hold' in df.columns:
+            df = df.rename(columns={'hold': 'amount'})
+        if 'amount' in df.columns and 'amount' not in keep_cols:
+            keep_cols.append('amount')
+        df = df[[c for c in keep_cols if c in df.columns]]
+
+        # Filter to the past 1 year
+        df['timestamps'] = pd.to_datetime(df['timestamps'])
+        one_year_ago = datetime.datetime.now() - datetime.timedelta(days=365)
+        df = df[df['timestamps'] >= one_year_ago].sort_values('timestamps').reset_index(drop=True)
+
+        if len(df) == 0:
+            return jsonify({'error': f'No data within the past 1 year for symbol: {symbol}'}), 400
+
+        # Save CSV to data directory
+        data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+        os.makedirs(data_dir, exist_ok=True)
+        filename = f'futures_{symbol}_1y_daily.csv'
+        csv_path = os.path.join(data_dir, filename)
+        # Use ISO format timestamps for stable parsing
+        df_to_save = df.copy()
+        df_to_save['timestamps'] = df_to_save['timestamps'].dt.strftime('%Y-%m-%d')
+        df_to_save.to_csv(csv_path, index=False, encoding='utf-8-sig')
+
+        file_size = os.path.getsize(csv_path)
+        size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024 * 1024 else f"{file_size / (1024 * 1024):.1f} MB"
+
+        return jsonify({
+            'success': True,
+            'message': f'Successfully fetched {len(df)} daily K-line rows for {symbol}',
+            'file': {
+                'name': filename,
+                'path': csv_path,
+                'size': size_str
+            },
+            'rows': len(df),
+            'start_date': df['timestamps'].min().strftime('%Y-%m-%d'),
+            'end_date': df['timestamps'].max().strftime('%Y-%m-%d')
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to fetch futures data: {str(e)}'}), 500
 
 @app.route('/api/predict', methods=['POST'])
 def predict():
